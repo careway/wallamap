@@ -1,14 +1,18 @@
 // Mapa de resultados agregados.
 //
-// Dos invariantes que conviene no romper:
-//  1. El navegador nunca recibe coordenadas de anuncios: sólo centros de zona.
+// Todo ocurre en el navegador: `store.js` llama a Wallapop y agrupa por zonas.
+// No hay backend. Dos cosas que conviene no romper:
+//  1. Los puntos por anuncio (ya difuminados ~1 km por Wallapop) no se pintan:
+//     el mapa sólo enseña centros de zona con k-anonimato.
 //  2. Las viñetas que aparecen al acercar el mapa se colocan con un hash del id
 //     del anuncio, no con su ubicación. Son decorativas y la interfaz lo dice.
+
+import { searchCells, recell } from './lib/store.js';
 
 const DEFAULT_VIEW = { lat: 40.4168, lon: -3.7038, zoom: 12 };
 const CELL_Z_OFFSET = 2;      // nivel de celda = zoom del mapa + 2 (~64 px por zona)
 const MIN_CELL_Z = 3;
-const MAX_CELL_Z = 14;        // suelo de privacidad, también en el servidor
+const MAX_CELL_Z = 14;        // suelo de privacidad; el de verdad lo aplica privacy.js
 const PIN_SIZE = 46;          // lado de la viñeta, en píxeles
 const MAX_PINS = 24;          // tope por zona, para no ahogar el mapa
 const ZONE_PREVIEW = 6;      // anuncios visibles al desplegar una zona en el panel
@@ -512,8 +516,7 @@ async function runSearch() {
 
   setLoading(true);
   toast(null);
-  inFlight?.abort();
-  const ctrl = (inFlight = new AbortController());
+  const run = (inFlight = Symbol('search'));   // marca la petición en curso; una posterior la invalida
 
   try {
     const { lat, lon } = await currentCenter();
@@ -524,7 +527,18 @@ async function runSearch() {
     params.set('lon', lon.toFixed(4));
     params.set('cellZ', currentCellZ);
 
-    const body = await request(`/api/search?${params}`, ctrl.signal);
+    const body = await searchCells({
+      keywords,
+      lat: lat.toFixed(4),
+      lon: lon.toFixed(4),
+      cellZ: currentCellZ,
+      pages: els.pages.value,
+      order: els.order.value,
+      minPrice: els.minPrice.value || undefined,
+      maxPrice: els.maxPrice.value || undefined,
+      distance: els.distance.value || undefined,
+    });
+    if (inFlight !== run) return;   // ha entrado otra búsqueda mientras descargábamos
     searchId = body.searchId;
     searchCenter = L.latLng(lat, lon);
     els.searchHere.hidden = true;
@@ -544,38 +558,28 @@ async function runSearch() {
     }
     syncUrl(params);
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (inFlight !== run) return;   // una búsqueda posterior manda: su error, no el nuestro
     toast(err.message, 'error');
     els.zoneList.innerHTML = '';
   } finally {
-    setLoading(false);
-    inFlight = null;
+    if (inFlight === run) {
+      setLoading(false);
+      inFlight = null;
+    }
   }
 }
 
 /** Reagrupa la búsqueda ya descargada al nivel que toca para el zoom actual. */
-async function refreshCells() {
+function refreshCells() {
   const cellZ = cellZFor(map.getZoom());
   if (!searchId || cellZ === currentCellZ) return;
   currentCellZ = cellZ;
   try {
-    const body = await request(`/api/cells?searchId=${searchId}&cellZ=${cellZ}`);
-    render(body);
+    render(recell({ searchId, cellZ }));
   } catch (err) {
     if (err.expired) { searchId = null; runSearch(); return; }
     toast(err.message, 'error');
   }
-}
-
-async function request(url, signal) {
-  const res = await fetch(url, { signal });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const error = new Error(body.error ?? `Error ${res.status}`);
-    error.expired = Boolean(body.expired);
-    throw error;
-  }
-  return body;
 }
 
 function showEmpty(keywords) {

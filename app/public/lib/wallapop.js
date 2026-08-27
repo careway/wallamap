@@ -1,6 +1,10 @@
 // Cliente del endpoint público de búsqueda de Wallapop.
 // No es una API oficial: puede cambiar sin aviso. Todo lo que dependa de su
 // forma exacta está aislado aquí (normalizeItem) para poder arreglarlo en un sitio.
+//
+// Se llama directo desde el navegador. Hoy Wallapop lo permite: responde con
+// `Access-Control-Allow-Origin: *` y acepta `X-DeviceOS` en el preflight. Si
+// algún día cierra el CORS habría que volver a pasar por un proxy propio.
 
 const SEARCH_URL = 'https://api.wallapop.com/api/v3/search';
 

@@ -1,26 +1,14 @@
 services:
+  # Sólo sirve ficheros estáticos. El navegador habla con Wallapop directamente,
+  # así que este contenedor no necesita salir a internet.
   wallamap:
-    build:
-      context: ./app
-      dockerfile: Dockerfile
+    image: nginx:alpine
     container_name: wallamap
     restart: always
-    environment:
-      - HTTPS_PROXY=http://squid_proxy:3128
-      - HTTP_PROXY=http://squid_proxy:3128
-      - NO_PROXY=nginx_proxy_manager
-    networks:
-      - red_privada
-
-  squid_proxy:
-    image: ubuntu/squid:latest
-    container_name: squid_proxy
-    restart: always
     volumes:
-      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+      - ./app/public:/usr/share/nginx/html:ro
     networks:
       - red_privada
-      - red_egress
 
   proxy_manager:
     image: 'jc21/nginx-proxy-manager:latest'
@@ -57,5 +45,3 @@ networks:
   red_privada:
     driver: bridge
     internal: true
-  red_egress:
-    driver: bridge
