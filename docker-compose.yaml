@@ -1,14 +1,17 @@
 services:
   # Sólo sirve ficheros estáticos. El navegador habla con Wallapop directamente,
-  # así que este contenedor no necesita salir a internet.
+  # así que este contenedor no hace ninguna petición de salida.
   wallamap:
     image: nginx:alpine
     container_name: wallamap
     restart: always
+    ports:
+      - '127.0.0.1:3000:3000'   # acceso local directo; en prod se entra por el proxy
     volumes:
       - ./app/public:/usr/share/nginx/html:ro
+      - ./app/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - red_privada
+      - red
 
   proxy_manager:
     image: 'jc21/nginx-proxy-manager:latest'
@@ -22,8 +25,7 @@ services:
       - ./proxy/data:/data
       - ./proxy/letsencrypt:/etc/letsencrypt
     networks:
-      - red_publica
-      - red_privada
+      - red
 
   duckdns:
     image: lscr.io/linuxserver/duckdns:latest
@@ -37,11 +39,8 @@ services:
       - TOKEN=${DUCKDNS_TOKEN}
       - LOG_FILE=true
     networks:
-      - red_publica
+      - red
 
 networks:
-  red_publica:
+  red:
     driver: bridge
-  red_privada:
-    driver: bridge
-    internal: true
