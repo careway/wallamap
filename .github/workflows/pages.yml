@@ -1,0 +1,37 @@
+name: Deploy a GitHub Pages
+
+# Publica app/public/ (la versión sin backend) en GitHub Pages.
+# Requiere: Settings -> Pages -> Source = "GitHub Actions".
+
+on:
+  push:
+    branches: [cliente-side]
+    paths:
+      - 'app/public/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Un despliegue a la vez; no se cancela el que esté en curso.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/public
+      - id: deployment
+        uses: actions/deploy-pages@v4
