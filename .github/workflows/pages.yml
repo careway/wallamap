@@ -1,7 +1,8 @@
 name: Deploy a GitHub Pages
 
 # Publica app/public/ (la versión sin backend) en GitHub Pages.
-# Requiere: Settings -> Pages -> Source = "GitHub Actions".
+# `enablement: true` activa Pages la primera vez; si tu repo no lo permite por
+# política, actívalo a mano en Settings -> Pages -> Source = "GitHub Actions".
 
 on:
   push:
@@ -28,10 +29,12 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/checkout@v5
+      - uses: actions/configure-pages@v6
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: app/public
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
