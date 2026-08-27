@@ -181,8 +181,9 @@ p { margin: 0; }
 .stack { display: flex; flex-direction: column; gap: 12px; width: 100%; min-height: 0; }
 .map-tools { grid-column: 2; grid-row: 1; justify-self: center; pointer-events: none; }
 .map-tools > * { pointer-events: auto; }
-.zoom-hint { grid-column: 2; grid-row: 2; align-self: end; justify-self: center; margin-bottom: 4px; }
-.legend { grid-column: 2; grid-row: 3; justify-self: end; align-self: end; width: 232px; }
+/* Esquina inferior derecha: leyenda arriba, "N zonas abiertas" pegado abajo. */
+.corner-br { grid-column: 2; grid-row: 3; justify-self: end; align-self: end; width: 232px; display: flex; flex-direction: column; gap: 10px; }
+.legend { width: 100%; }
 .toast { grid-column: 2; grid-row: 1; justify-self: end; }
 
 /* ---------- superficies ---------- */
@@ -386,9 +387,11 @@ select {
 .zoom-hint {
   font-size: 11.5px; color: var(--text-secondary);
   background: var(--glass); backdrop-filter: blur(16px);
-  border: 1px solid var(--border-soft); border-radius: var(--r-pill);
+  border: 1px solid var(--border-soft); border-radius: var(--r-md);
   padding: 6px 13px; box-shadow: var(--shadow-sm);
-  display: flex; align-items: center; gap: 7px;
+  display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; gap: 2px 7px; text-align: center;
+  align-self: center;                 /* dentro de .corner-br, centrado */
 }
 .zoom-hint b { color: var(--text-primary); font-weight: 600; }
 
@@ -534,10 +537,11 @@ select {
   .overlay { grid-template-columns: 1fr; grid-template-rows: auto 1fr auto; padding: 10px; gap: 10px; }
   .sidebar { grid-row: 1; align-self: start; }
   .stack { max-height: none; }
-  .map-tools, .zoom-hint, .toast { grid-column: 1; }
+  .map-tools, .corner-br, .toast { grid-column: 1; }
   .map-tools { grid-row: 2; align-self: start; }
-  /* Justo encima de la hoja plegada; al desplegarla queda debajo, que no importa. */
-  .zoom-hint { grid-row: 3; justify-self: center; align-self: end; margin-bottom: 84px; }
+  /* Sólo el "N zonas abiertas": justo encima de la hoja plegada. Al desplegarla
+     queda debajo, que no importa. */
+  .corner-br { grid-row: 3; justify-self: center; align-self: end; width: auto; margin-bottom: 84px; }
   .legend { display: none; }
   .filters { left: 10px; right: 10px; width: auto; top: 116px; }
   /* La atribución de OSM tiene que verse por encima de la hoja plegada. */
