@@ -3,7 +3,6 @@
 // forma exacta está aislado aquí (normalizeItem) para poder arreglarlo en un sitio.
 
 const SEARCH_URL = 'https://api.wallapop.com/api/v3/search';
-const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
 
 const ORDERS = new Set(['most_relevance', 'newest', 'price_low_to_high', 'price_high_to_low', 'closest']);
 
@@ -29,12 +28,10 @@ async function fetchPage(params, { timeoutMs = 15000 } = {}) {
   try {
     const res = await fetch(buildUrl(params), {
       headers: {
-        'User-Agent': UA,
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'es-ES,es;q=0.9',
+        // Única cabecera que el endpoint exige: sin ella (o vacía) responde 403.
+        // No hace falta falsear User-Agent / Origin / Referer.
         'X-DeviceOS': '0',
-        'Origin': 'https://es.wallapop.com',
-        'Referer': 'https://es.wallapop.com/',
+        'Accept': 'application/json',
       },
       signal: ctrl.signal,
     });

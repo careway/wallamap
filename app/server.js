@@ -1,3 +1,11 @@
+// server.js — ANTES de cualquier otro import que use fetch
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
+
+if (process.env.HTTPS_PROXY) {
+  setGlobalDispatcher(new ProxyAgent(process.env.HTTPS_PROXY));
+}
+
+// resto de imports (incluyendo el cliente de Wallapop)
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -161,6 +169,6 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Wallapop Mapper escuchando en http://localhost:${PORT}`);
 });
