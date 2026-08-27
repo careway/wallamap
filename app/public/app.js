@@ -7,7 +7,7 @@
 //  2. Las viñetas que aparecen al acercar el mapa se colocan con un hash del id
 //     del anuncio, no con su ubicación. Son decorativas y la interfaz lo dice.
 
-import { searchCells, recell } from './lib/store.js';
+import { startSearch, extendSearch, recell, coverageGap, hasSession } from './lib/store.js';
 import { installSheet } from './lib/sheet.js';
 
 const DEFAULT_VIEW = { lat: 40.4168, lon: -3.7038, zoom: 12 };
@@ -27,7 +27,7 @@ const els = {
   order: $('order'), pages: $('pages'), centerMode: $('center-mode'),
   resultsTitle: $('results-title'), resultsSub: $('results-sub'),
   zoneList: $('zone-list'), empty: $('empty'),
-  searchHere: $('search-here'), zoomHint: $('zoom-hint'),
+  searchHere: $('search-here'), mapBusy: $('map-busy'), zoomHint: $('zoom-hint'),
   legend: $('legend'), legendItems: $('legend-items'), legendNote: $('legend-note'),
   legendStrokes: $('legend-strokes'),
   toast: $('toast'),
@@ -198,6 +198,7 @@ function itemPopupHtml(item, cell, loose = false) {
 
 /* ============ render ============ */
 let lastResult = null;
+let selectedZoneId = null;      // se conserva entre re-renders mientras la zona exista
 const circles = new Map();      // sólo las zonas con aro dibujado
 const zoneBounds = new Map();   // geometría de todas, para poder volar a ellas
 
@@ -371,7 +372,9 @@ function renderPins(cell, index, { spreadKm = cell.radiusKm, loose = false, impr
 }
 
 function renderList(cells) {
+  const prevScroll = els.zoneList.scrollTop;
   els.zoneList.innerHTML = cells.map((cell, i) => zoneHtml(cell, i, colorFor(cell))).join('');
+  els.zoneList.scrollTop = prevScroll;   // no saltar al principio en cada re-render
   els.zoneList.querySelectorAll('.zone').forEach((node) => {
     node.addEventListener('click', (event) => {
       if (event.target.closest('a')) return;
@@ -381,7 +384,15 @@ function renderList(cells) {
     });
   });
   els.empty.hidden = cells.length > 0;
-  if (cells.length) selectZone(cells[0].id, false);
+
+  // Conserva la zona seleccionada entre re-renders (zoom, paneo, tiles nuevos);
+  // sólo centra y hace scroll cuando no hay ninguna válida que mantener.
+  const keep = selectedZoneId && cells.some((c) => c.id === selectedZoneId);
+  if (keep) {
+    els.zoneList.querySelectorAll('.zone').forEach((n) => n.classList.toggle('active', n.dataset.id === selectedZoneId));
+  } else if (cells.length) {
+    selectZone(cells[0].id, false);
+  }
 }
 
 function renderHeader({ cells, stats }) {
@@ -436,6 +447,7 @@ function renderZoomHint(stats, bloomed) {
 }
 
 function selectZone(id, fly) {
+  selectedZoneId = id;
   els.zoneList.querySelectorAll('.zone').forEach((n) => n.classList.toggle('active', n.dataset.id === id));
   const node = els.zoneList.querySelector(`.zone[data-id="${CSS.escape(id)}"]`);
   const bounds = zoneBounds.get(id);
@@ -447,12 +459,12 @@ function selectZone(id, fly) {
 }
 
 /* ============ estado y peticiones ============ */
-let searchId = null;
 let currentCellZ = null;
 let keepView = false;
 let programmaticMove = false;   // encuadres nuestros: no cuentan como "el usuario se ha movido"
-let searchCenter = null;
 let inFlight = null;
+let extending = false;          // hay un tile en vuelo por paneo
+let extendTimer = null;
 
 function filterParams() {
   const p = new URLSearchParams({ pages: els.pages.value, order: els.order.value });
@@ -484,7 +496,7 @@ els.chips.addEventListener('click', (event) => {
   if (key === 'distance') els.distance.value = '';
   if (key === 'order') els.order.value = 'most_relevance';
   renderChips();
-  if (searchId) runSearch();
+  if (hasSession()) runSearch();
 });
 
 async function currentCenter() {
@@ -528,7 +540,7 @@ async function runSearch() {
     params.set('lon', lon.toFixed(4));
     params.set('cellZ', currentCellZ);
 
-    const body = await searchCells({
+    const body = await startSearch({
       keywords,
       lat: lat.toFixed(4),
       lon: lon.toFixed(4),
@@ -540,8 +552,6 @@ async function runSearch() {
       distance: els.distance.value || undefined,
     });
     if (inFlight !== run) return;   // ha entrado otra búsqueda mientras descargábamos
-    searchId = body.searchId;
-    searchCenter = L.latLng(lat, lon);
     els.searchHere.hidden = true;
 
     if (!body.cells.length) {
@@ -570,16 +580,70 @@ async function runSearch() {
   }
 }
 
-/** Reagrupa la búsqueda ya descargada al nivel que toca para el zoom actual. */
+/** Reagrupa lo ya descargado al nivel que toca para el zoom actual. */
 function refreshCells() {
   const cellZ = cellZFor(map.getZoom());
-  if (!searchId || cellZ === currentCellZ) return;
+  if (!hasSession() || cellZ === currentCellZ) return;
   currentCellZ = cellZ;
   try {
-    render(recell({ searchId, cellZ }));
+    render(recell({ cellZ }));
   } catch (err) {
-    if (err.expired) { searchId = null; runSearch(); return; }
+    if (err.expired) { runSearch(); return; }
     toast(err.message, 'error');
+  }
+}
+
+/** Ancho aproximado del mapa en km, para decidir cada cuánto pedir tiles. */
+function viewportKm() {
+  const b = map.getBounds();
+  return b.getNorthWest().distanceTo(b.getNorthEast()) / 1000;
+}
+
+/** Muestra el indicador de "trayendo esta zona". */
+function setBusy(on) {
+  els.mapBusy.hidden = !on;
+}
+
+/**
+ * Al parar el mapa: si el centro cae fuera de los tiles ya traídos, pide otro y
+ * lo fusiona sin mover la vista. Se llama con debounce desde 'moveend'.
+ */
+async function autoExtend() {
+  if (extending || !hasSession()) return;
+  const c = map.getCenter();
+  if (!coverageGap(c.lat, c.lng, viewportKm())) return;
+
+  extending = true;
+  setBusy(true);
+  try {
+    currentCellZ = cellZFor(map.getZoom());
+    render(await extendSearch({ lat: c.lat, lon: c.lng, cellZ: currentCellZ }));
+    els.searchHere.hidden = true;   // zona ya cubierta
+    syncUrl();
+  } catch (err) {
+    if (err.expired) { runSearch(); return; }
+    // Fallo de red en una extensión: no se toca la vista; se reintenta al siguiente paneo.
+  } finally {
+    extending = false;
+    setBusy(false);
+  }
+}
+
+/** Fuerza traer la zona del centro actual aunque ya esté cubierta. */
+async function extendHere() {
+  if (!hasSession()) { els.centerMode.value = 'map'; runSearch(); return; }
+  const c = map.getCenter();
+  setBusy(true);
+  try {
+    currentCellZ = cellZFor(map.getZoom());
+    render(await extendSearch({ lat: c.lat, lon: c.lng, cellZ: currentCellZ }));
+    els.searchHere.hidden = true;
+    syncUrl();
+  } catch (err) {
+    if (err.expired) runSearch();
+    else toast(err.message, 'error');
+  } finally {
+    setBusy(false);
   }
 }
 
@@ -609,24 +673,31 @@ let zoomTimer;
 map.on('zoomend', () => {
   clearTimeout(zoomTimer);
   zoomTimer = setTimeout(() => {
-    const needsFetch = searchId && cellZFor(map.getZoom()) !== currentCellZ;
+    const needsFetch = hasSession() && cellZFor(map.getZoom()) !== currentCellZ;
     if (needsFetch) refreshCells();
     else render(lastResult);            // abrir o cerrar zonas no requiere datos nuevos
   }, 180);
 });
 map.on('moveend', () => {
-  // Sólo se ofrece rebuscar si el centro se ha ido lejos del de la búsqueda.
-  const drift = searchCenter ? map.getCenter().distanceTo(searchCenter) : 0;
-  const viewport = map.getBounds().getNorthWest().distanceTo(map.getBounds().getSouthEast());
-  if (programmaticMove) programmaticMove = false;
-  else if (searchId && drift > viewport * 0.3) els.searchHere.hidden = false;
+  const wasProgrammatic = programmaticMove;
+  programmaticMove = false;
   if (lastResult) render(lastResult);   // repuebla lo que entra y sale de vista
   syncUrl();
+  if (wasProgrammatic) return;
+
+  // El botón manual y el auto-fetch se guían por lo mismo: ¿el centro cae fuera
+  // de los tiles ya traídos? El botón aparece ya; el auto-fetch salta tras la
+  // pausa y, si va bien, lo oculta. Si falla, el botón se queda para reintentar.
+  const c = map.getCenter();
+  if (hasSession() && coverageGap(c.lat, c.lng, viewportKm())) els.searchHere.hidden = false;
+
+  clearTimeout(extendTimer);
+  extendTimer = setTimeout(autoExtend, 450);
 });
 
 /* ============ eventos de la interfaz ============ */
 els.form.addEventListener('submit', (e) => { e.preventDefault(); runSearch(); });
-els.searchHere.addEventListener('click', () => { els.centerMode.value = 'map'; runSearch(); });
+els.searchHere.addEventListener('click', extendHere);
 
 const toggleFilters = (open) => {
   els.filters.hidden = !open;

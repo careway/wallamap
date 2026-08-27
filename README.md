@@ -67,8 +67,20 @@ Que una zona se abra no depende de un umbral de zoom escrito a mano, sino de si
 sus viñetas caben dentro del círculo sin pisarse (`fitsInside()`).
 
 Cada cambio de zoom **no vuelve a pedirle nada a Wallapop**: `store.js` guarda los
-anuncios de la búsqueda bajo un `searchId` (10 min) y `recell()` los reagrupa al
-vuelo.
+anuncios en memoria (10 min) y `recell()` los reagrupa al vuelo.
+
+## Búsqueda progresiva
+
+Una búsqueda es una **sesión** que va acumulando *tiles*: cada tile es una
+petición a Wallapop centrada en un punto, con sus anuncios recortados al radio
+del filtro de distancia (Wallapop ignora el parámetro `distance`, así que el
+recorte se hace en el cliente — por eso "10 km" ahora significa 10 km de verdad).
+
+Al **parar de mover el mapa**, si el centro del recuadro cae fuera de los tiles
+ya traídos (`coverageGap()`), la app pide otro tile ahí y lo fusiona sin mover la
+vista. Así la cobertura crece conforme exploras. Se guardan como mucho ~14 tiles;
+los más viejos se descartan. El botón **"Buscar en esta zona"** fuerza el mismo
+tile manualmente (y aparece solo si hace falta).
 
 ## Estructura
 
@@ -76,7 +88,7 @@ vuelo.
 |---|---|
 | `app/public/index.html` | Interfaz: mapa Leaflet, panel de zonas, filtros. |
 | `app/public/app.js` | Render del mapa, viñetas, tema, estado y URL. |
-| `app/public/lib/store.js` | Orquesta búsqueda + agregación y cachea por `searchId`. Antes era `server.js`. |
+| `app/public/lib/store.js` | Sesión de búsqueda progresiva: tiles, recorte por radio, `coverageGap()`, agregación. Antes era `server.js`. |
 | `app/public/lib/wallapop.js` | Cliente del endpoint de búsqueda, paginación y `normalizeItem()`. |
 | `app/public/lib/privacy.js` | Rejilla de tiles y agregación con k-anonimato. `aggregate()` es pura. |
 | `docker-compose.yaml` | `nginx` sirviendo `app/public`, nginx-proxy-manager (TLS) y duckdns. |
