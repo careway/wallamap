@@ -27,7 +27,7 @@ const els = {
   order: $('order'), pages: $('pages'), centerMode: $('center-mode'),
   resultsTitle: $('results-title'), resultsSub: $('results-sub'),
   zoneList: $('zone-list'), empty: $('empty'),
-  searchHere: $('search-here'), mapBusy: $('map-busy'), zoomHint: $('zoom-hint'),
+  searchHere: $('search-here'), mapBusy: $('map-busy'),
   locateBtn: $('locate-btn'),
   legend: $('legend'), legendItems: $('legend-items'), legendNote: $('legend-note'),
   legendStrokes: $('legend-strokes'),
@@ -230,7 +230,6 @@ function render(result) {
   }
 
   const bounds = map.getBounds().pad(0.35);
-  let bloomed = 0;
   let imprecisePins = false;
   // Referencia para atenuar el relleno de las zonas grandes.
   const viewportM = map.getBounds().getNorthWest().distanceTo(map.getBounds().getNorthEast());
@@ -266,7 +265,6 @@ function render(result) {
     // amontonarlas en una chapa sugería un punto concreto, cuando justamente
     // son las menos precisas. Sus viñetas van marcadas como tales.
     const open = fitsInside(cell);
-    if (open) bloomed++;
 
     if (open) {
       renderPins(cell, index, { imprecise: widened });
@@ -297,7 +295,6 @@ function render(result) {
   renderList(cells);
   renderLegend(cells, stats, imprecisePins);
   renderHeader(result);
-  renderZoomHint(stats, bloomed);
 }
 
 /** Tinta legible sobre un color de la rampa (que va de teal claro a casi negro). */
@@ -446,15 +443,6 @@ function renderLegend(cells, stats, imprecisePins) {
 
   els.legendNote.textContent = 'Dentro de cada zona la posición es decorativa: nunca es la del anuncio.';
   els.legend.hidden = !cells.length;
-}
-
-function renderZoomHint(stats, bloomed) {
-  let text;
-  if (bloomed) text = `<b>${plural(bloomed, 'zona abierta', 'zonas abiertas')}</b> · posiciones aproximadas dentro de cada una`;
-  else if (stats.atFinestLevel) text = '<b>Detalle máximo de zona</b> · acerca más para abrir los anuncios';
-  else text = 'Acerca el mapa para <b>afinar las zonas</b>';
-  els.zoomHint.innerHTML = text;
-  els.zoomHint.hidden = false;
 }
 
 function selectZone(id, fly) {
