@@ -154,22 +154,6 @@ function listItemHtml(item) {
   </a></li>`;
 }
 
-function zoneHtml(cell, index, color) {
-  const price = cell.price
-    ? `${money(cell.price.min)} – ${money(cell.price.max)} · mediana ${money(cell.price.median)}`
-    : 'Sin precios';
-  return `<li class="zone" data-id="${esc(cell.id)}">
-    <div class="zone-top">
-      <span class="dot" style="background:${color}"></span>
-      <span class="zone-title">${zoneName(cell, index)}</span>
-      <span class="zone-count">${cell.count}</span>
-    </div>
-    <p class="zone-sub">${price}</p>
-    <ul class="zone-items">${cell.items.slice(0, ZONE_PREVIEW).map(listItemHtml).join('')}</ul>
-    ${cell.count > ZONE_PREVIEW ? `<button class="zone-more" data-more="${esc(cell.id)}">Ver ${plural(cell.count - ZONE_PREVIEW, 'anuncio más', 'anuncios más')} en el mapa →</button>` : ''}
-  </li>`;
-}
-
 function zonePopupHtml(cell, index) {
   const price = cell.price ? `${money(cell.price.min)} – ${money(cell.price.max)}` : 'sin precio';
   return `<div class="popup">
@@ -180,6 +164,64 @@ function zonePopupHtml(cell, index) {
       ? 'Por debajo del mínimo por zona: de estos anuncios sólo se publica la provincia.'
       : `Están en torno a esta zona de ${km(cell.radiusKm * 2)}, sin más precisión.`}</p>
   </div>`;
+}
+
+/* --- listado agrupado por población (no por celda del mapa) --- */
+
+const placeKeyOf = (cell) => cell.city || cell.region || 'Otras zonas';
+const placeColor = (place) => (place.precise ? cssVar(bucketOf(place).varName) : cssVar('--d-sparse'));
+
+function priceSummary(items) {
+  const prices = items.map((i) => i.price).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!prices.length) return null;
+  const mid = Math.floor(prices.length / 2);
+  return {
+    min: prices[0],
+    max: prices[prices.length - 1],
+    median: prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2,
+  };
+}
+
+/** Junta las celdas del mapa en poblaciones. Hereda el orden de `cells` (por
+ *  cercanía al centro): la primera aparición de una población marca su sitio. */
+function buildPlaces(cells) {
+  const byKey = new Map();
+  for (const cell of cells) {
+    const key = placeKeyOf(cell);
+    let place = byKey.get(key);
+    if (!place) {
+      place = { key, name: key, cells: [], items: [], count: 0, precise: false };
+      byKey.set(key, place);
+    }
+    place.cells.push(cell);
+    place.items.push(...cell.items);
+    place.count += cell.count;
+    if (!cell.anonymous) place.precise = true;
+  }
+  const places = [...byKey.values()];
+  for (const place of places) {
+    place.items.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+    place.price = priceSummary(place.items);
+  }
+  return places;
+}
+
+function placeHtml(place, index) {
+  const p = place.price;
+  const priceLine = p ? `${money(p.min)} – ${money(p.max)} · mediana ${money(p.median)}` : 'Sin precios';
+  const preview = place.items.slice(0, ZONE_PREVIEW).map(listItemHtml).join('');
+  const rest = place.items.slice(ZONE_PREVIEW);
+  return `<li class="zone" data-id="${esc(place.key)}">
+    <div class="zone-top">
+      <span class="dot" style="background:${placeColor(place)}"></span>
+      <span class="zone-title">${index + 1}. ${esc(place.name)}${place.precise ? '' : ' · sólo provincia'}</span>
+      <span class="zone-count">${place.count}</span>
+    </div>
+    <p class="zone-sub">${priceLine}</p>
+    <ul class="zone-items">${preview}</ul>
+    ${rest.length ? `<ul class="zone-items zone-rest" hidden>${rest.map(listItemHtml).join('')}</ul>
+      <button class="zone-more" type="button">Ver ${plural(rest.length, 'anuncio más', 'anuncios más')}</button>` : ''}
+  </li>`;
 }
 
 function itemPopupHtml(item, cell, loose = false) {
@@ -199,9 +241,8 @@ function itemPopupHtml(item, cell, loose = false) {
 
 /* ============ render ============ */
 let lastResult = null;
-let selectedZoneId = null;      // se conserva entre re-renders mientras la zona exista
-const circles = new Map();      // sólo las zonas con aro dibujado
-const zoneBounds = new Map();   // geometría de todas, para poder volar a ellas
+let selectedZoneId = null;      // clave de la población seleccionada; se conserva entre re-renders
+const zoneBounds = new Map();   // población -> bounds, para volar a ella
 
 function render(result) {
   if (!result) return;
@@ -220,13 +261,18 @@ function render(result) {
 
   zoneLayer.clearLayers();
   pinLayer.clearLayers();
-  circles.clear();
   zoneBounds.clear();
-  // El panel lista todas las zonas, también las que no se dibujan (fuera de
-  // vista, o con el aro demasiado grande), así que su geometría se guarda
-  // aparte para que al pulsarlas el mapa pueda ir hasta ellas.
-  for (const cell of cells) {
-    zoneBounds.set(cell.id, L.latLng(cell.lat, cell.lon).toBounds(cell.radiusKm * 2000));
+
+  // El listado agrupa por población; el mapa sigue dibujando un círculo por celda.
+  const places = buildPlaces(cells);
+  const placeIndexOf = new Map(places.map((p, i) => [p.key, i]));
+  for (const place of places) {
+    let b = null;
+    for (const c of place.cells) {
+      const cb = L.latLng(c.lat, c.lon).toBounds(Math.max(c.radiusKm, 1) * 2000);
+      b = b ? b.extend(cb) : cb;
+    }
+    zoneBounds.set(place.key, b);
   }
 
   const bounds = map.getBounds().pad(0.35);
@@ -234,7 +280,8 @@ function render(result) {
   // Referencia para atenuar el relleno de las zonas grandes.
   const viewportM = map.getBounds().getNorthWest().distanceTo(map.getBounds().getNorthEast());
 
-  cells.forEach((cell, index) => {
+  cells.forEach((cell) => {
+    const index = placeIndexOf.get(placeKeyOf(cell));   // nº de la población en el listado
     const color = colorFor(cell);
     // Si el centro no está en pantalla sólo se vería un arco suelto: no aporta
     // nada y el panel lateral ya lista la zona.
@@ -287,14 +334,13 @@ function render(result) {
       fillOpacity: widened ? 0.03 : Math.max(0.05, (open ? 0.1 : 0.22) - screenShare * 0.4),
       className: 'zone-circle',
     }).addTo(zoneLayer);
-    circle.on('click', () => selectZone(cell.id, false));
-    circles.set(cell.id, circle);
+    circle.on('click', () => selectZone(placeKeyOf(cell), false));
     circle.bindPopup(zonePopupHtml(cell, index), { maxWidth: 300, autoPanPadding: [28, 28] });
   });
 
-  renderList(cells);
+  renderList(places);
   renderLegend(cells, stats, imprecisePins);
-  renderHeader(result);
+  renderHeader(result, places);
 }
 
 /** Tinta legible sobre un color de la rampa (que va de teal claro a casi negro). */
@@ -350,7 +396,7 @@ function renderCount(cell, index, color, widened) {
 
   if (compact) {
     marker
-      .on('click', () => selectZone(cell.id, false))
+      .on('click', () => selectZone(placeKeyOf(cell), false))
       .bindPopup(zonePopupHtml(cell, index), { maxWidth: 300, autoPanPadding: [28, 28] });
   }
 }
@@ -379,42 +425,48 @@ function renderPins(cell, index, { spreadKm = cell.radiusKm, loose = false, impr
   });
 }
 
-function renderList(cells) {
+function renderList(places) {
   const prevScroll = els.zoneList.scrollTop;
-  els.zoneList.innerHTML = cells.map((cell, i) => zoneHtml(cell, i, colorFor(cell))).join('');
+  els.zoneList.innerHTML = places.map((p, i) => placeHtml(p, i)).join('');
   els.zoneList.scrollTop = prevScroll;   // no saltar al principio en cada re-render
   els.zoneList.querySelectorAll('.zone').forEach((node) => {
     node.addEventListener('click', (event) => {
       if (event.target.closest('a')) return;
       const more = event.target.closest('.zone-more');
+      if (more) {
+        const rest = node.querySelector('.zone-rest');
+        const wasOpen = !rest.hidden;
+        rest.hidden = wasOpen;
+        more.textContent = wasOpen
+          ? `Ver ${plural(rest.children.length, 'anuncio más', 'anuncios más')}`
+          : 'Ver menos';
+        return;
+      }
       selectZone(node.dataset.id, true);
-      if (more) circles.get(more.dataset.more)?.openPopup();
     });
   });
-  els.empty.hidden = cells.length > 0;
+  els.empty.hidden = places.length > 0;
 
-  // Conserva la zona seleccionada entre re-renders (zoom, paneo, tiles nuevos);
-  // sólo centra y hace scroll cuando no hay ninguna válida que mantener.
-  const keep = selectedZoneId && cells.some((c) => c.id === selectedZoneId);
+  // Conserva la población seleccionada entre re-renders; sólo hace scroll cuando
+  // no hay ninguna válida que mantener.
+  const keep = selectedZoneId && places.some((p) => p.key === selectedZoneId);
   if (keep) {
     els.zoneList.querySelectorAll('.zone').forEach((n) => n.classList.toggle('active', n.dataset.id === selectedZoneId));
-  } else if (cells.length) {
-    selectZone(cells[0].id, false);
+  } else if (places.length) {
+    selectZone(places[0].key, false);
   }
 }
 
-function renderHeader({ cells, stats }) {
+function renderHeader({ cells }, places) {
   const shown = cells.reduce((n, c) => n + c.count, 0);
-  const zones = cells.filter((c) => !c.anonymous);
-  const loose = cells.reduce((n, c) => n + (c.anonymous ? c.count : 0), 0);
-  els.resultsTitle.innerHTML = `<span class="accent">${shown}</span> anuncios en ${plural(zones.length, 'zona', 'zonas')}`;
+  els.resultsTitle.innerHTML =
+    `<span class="accent">${shown}</span> ${plural(shown, 'anuncio', 'anuncios')} en ${plural(places.length, 'población', 'poblaciones')}`;
 
-  if (!cells.length) { els.resultsSub.textContent = 'Sin resultados'; return; }
-  const sizes = zones.map((c) => c.radiusKm * 2);
+  if (!places.length) { els.resultsSub.textContent = 'Sin resultados'; return; }
+  const onlyProv = places.filter((p) => !p.precise).length;
   els.resultsSub.textContent = [
-    sizes.length ? `Zonas de ${km(Math.min(...sizes))} a ${km(Math.max(...sizes))}` : null,
-    sizes.length ? `mínimo ${stats.k} anuncios cada una` : null,
-    loose ? `${plural(loose, 'suelto', 'sueltos')} sin zona` : null,
+    'Ordenadas por cercanía al centro del mapa',
+    onlyProv ? `${plural(onlyProv, 'población', 'poblaciones')} sólo por provincia` : null,
   ].filter(Boolean).join(' · ');
 }
 
@@ -452,7 +504,7 @@ function selectZone(id, fly) {
   const bounds = zoneBounds.get(id);
   if (fly && bounds) {
     programmaticMove = true;
-    map.flyToBounds(bounds.pad(0.35), { duration: 0.5 });
+    map.flyToBounds(bounds.pad(0.3), { duration: 0.5, maxZoom: 14 });
   }
   if (!fly && node) node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
