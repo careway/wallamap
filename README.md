@@ -86,6 +86,14 @@ La lista de zonas (y la numeración de las burbujas) se ordena por **cercanía a
 centro del mapa**: lo que tienes enfocado sale primero, y se reordena al panear.
 Empate: más anuncios antes.
 
+## Mi ubicación
+
+El botón azul de la esquina inferior derecha pide la ubicación, pinta un **punto
+azul** (con halo de precisión) y vuela hasta allí con zoom. Mientras el punto es
+el centro, la búsqueda va centrada en la persona; **en cuanto mueves el mapa**,
+vuelve al modo "centro del mapa". El punto se queda y se sigue con
+`watchPosition`. El selector "Centro de búsqueda" de los filtros hace lo mismo.
+
 ## Estructura
 
 | Fichero | Qué hace |

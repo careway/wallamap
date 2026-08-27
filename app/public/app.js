@@ -28,6 +28,7 @@ const els = {
   resultsTitle: $('results-title'), resultsSub: $('results-sub'),
   zoneList: $('zone-list'), empty: $('empty'),
   searchHere: $('search-here'), mapBusy: $('map-busy'), zoomHint: $('zoom-hint'),
+  locateBtn: $('locate-btn'),
   legend: $('legend'), legendItems: $('legend-items'), legendNote: $('legend-note'),
   legendStrokes: $('legend-strokes'),
   toast: $('toast'),
@@ -509,15 +510,86 @@ els.chips.addEventListener('click', (event) => {
   if (hasSession()) runSearch();
 });
 
+/* ============ ubicación del usuario ============ */
+let lastUserPos = null;        // GeolocationPosition más reciente
+let geoWatchId = null;
+let userDot = null;
+let userHalo = null;
+
+function getUserPosition() {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true, timeout: 9000, maximumAge: 60000,
+    });
+  });
+}
+
+/** Pinta (o mueve) el punto azul y su halo de precisión. */
+function drawUserLocation(pos) {
+  lastUserPos = pos;
+  const ll = [pos.coords.latitude, pos.coords.longitude];
+  const acc = pos.coords.accuracy || 0;
+  if (!userDot) {
+    userHalo = L.circle(ll, {
+      radius: acc, color: cssVar('--geo'), weight: 1, opacity: 0.3,
+      fillColor: cssVar('--geo'), fillOpacity: 0.1, interactive: false,
+    }).addTo(map);
+    userDot = L.marker(ll, {
+      icon: L.divIcon({ className: 'user-dot', html: '<span></span>', iconSize: [21, 21], iconAnchor: [10.5, 10.5] }),
+      interactive: false, keyboard: false, zIndexOffset: 1000,
+    }).addTo(map);
+  } else {
+    userDot.setLatLng(ll);
+    userHalo.setLatLng(ll).setRadius(acc);
+  }
+}
+
+function setGeoMode(on) {
+  els.centerMode.value = on ? 'geo' : 'map';
+  els.locateBtn.classList.toggle('active', on);
+  els.locateBtn.setAttribute('aria-pressed', String(on));
+}
+
+function startGeoWatch() {
+  if (geoWatchId !== null || !navigator.geolocation) return;
+  geoWatchId = navigator.geolocation.watchPosition(
+    drawUserLocation, () => {}, { enableHighAccuracy: true, maximumAge: 30000 },
+  );
+}
+
+/** Botón de ubicación: sitúa el punto, vuela allí y busca centrado en la persona. */
+async function locateMe() {
+  if (!navigator.geolocation) { toast('Tu navegador no comparte la ubicación', 'error'); return; }
+  els.locateBtn.classList.add('busy');
+  try {
+    const pos = await getUserPosition();
+    drawUserLocation(pos);
+    startGeoWatch();
+    setGeoMode(true);
+    keepView = true;                 // que runSearch no reencuadre a los resultados
+    programmaticMove = true;
+    map.flyTo([pos.coords.latitude, pos.coords.longitude], Math.max(map.getZoom(), 14), { duration: 0.6 });
+    if (els.keywords.value.trim()) runSearch();
+  } catch (err) {
+    toast(err && err.code === 1 ? 'Permiso de ubicación denegado' : 'No se pudo obtener tu ubicación', 'error');
+  } finally {
+    els.locateBtn.classList.remove('busy');
+  }
+}
+
 async function currentCenter() {
-  if (els.centerMode.value === 'geo' && navigator.geolocation) {
-    try {
-      const pos = await new Promise((resolve, reject) =>
-        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 8000, maximumAge: 300000 }));
-      map.setView([pos.coords.latitude, pos.coords.longitude], Math.max(map.getZoom(), 12));
-      return { lat: pos.coords.latitude, lon: pos.coords.longitude };
-    } catch {
-      toast('No se pudo obtener tu ubicación; uso el centro del mapa.');
+  if (els.centerMode.value === 'geo') {
+    if (lastUserPos && Date.now() - lastUserPos.timestamp < 120000) {
+      return { lat: lastUserPos.coords.latitude, lon: lastUserPos.coords.longitude };
+    }
+    if (navigator.geolocation) {
+      try {
+        const pos = await getUserPosition();
+        drawUserLocation(pos);
+        return { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      } catch {
+        toast('No se pudo obtener tu ubicación; uso el centro del mapa.');
+      }
     }
   }
   const c = map.getCenter();
@@ -695,6 +767,9 @@ map.on('moveend', () => {
   syncUrl();
   if (wasProgrammatic) return;
 
+  // El usuario ha movido el mapa: se busca centrado en el mapa, no en la persona.
+  if (els.centerMode.value === 'geo') setGeoMode(false);
+
   // El botón manual y el auto-fetch se guían por lo mismo: ¿el centro cae fuera
   // de los tiles ya traídos? El botón aparece ya; el auto-fetch salta tras la
   // pausa y, si va bien, lo oculta. Si falla, el botón se queda para reintentar.
@@ -708,6 +783,11 @@ map.on('moveend', () => {
 /* ============ eventos de la interfaz ============ */
 els.form.addEventListener('submit', (e) => { e.preventDefault(); runSearch(); });
 els.searchHere.addEventListener('click', extendHere);
+els.locateBtn.addEventListener('click', locateMe);
+els.centerMode.addEventListener('change', () => {
+  if (els.centerMode.value === 'geo') locateMe();
+  else els.locateBtn.classList.remove('active');
+});
 
 const toggleFilters = (open) => {
   els.filters.hidden = !open;

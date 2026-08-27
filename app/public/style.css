@@ -25,6 +25,8 @@
   --accent-text: #0d7d6d;
   --accent-soft: rgba(61, 210, 186, .15);
 
+  --geo: #2f7ef7;   /* punto de "mi ubicación" (azul, no menta) */
+
   --d1: #2ec8af;
   --d2: #17ab95;
   --d3: #12907e;
@@ -67,6 +69,8 @@
     --accent-text: #3dd2ba;
     --accent-soft: rgba(61, 210, 186, .16);
 
+    --geo: #5b9dff;
+
     /* La rampa se recorre al revés sobre fondo oscuro: más anuncios, más luz. */
     --d1: #0e6d5f;
     --d2: #149181;
@@ -107,6 +111,8 @@
   --accent-ink:  #04302a;
   --accent-text: #3dd2ba;
   --accent-soft: rgba(61, 210, 186, .16);
+
+  --geo: #5b9dff;
 
   /* La rampa se recorre al revés sobre fondo oscuro: más anuncios, más luz. */
   --d1: #0e6d5f;
@@ -181,9 +187,35 @@ p { margin: 0; }
 .stack { display: flex; flex-direction: column; gap: 12px; width: 100%; min-height: 0; }
 .map-tools { grid-column: 2; grid-row: 1; justify-self: center; pointer-events: none; }
 .map-tools > * { pointer-events: auto; }
-/* Esquina inferior derecha: leyenda arriba, "N zonas abiertas" pegado abajo. */
-.corner-br { grid-column: 2; grid-row: 3; justify-self: end; align-self: end; width: 232px; display: flex; flex-direction: column; gap: 10px; }
+/* Esquina inferior derecha: leyenda + "N zonas abiertas", sobre el botón de ubicación. */
+.corner-br { grid-column: 2; grid-row: 3; justify-self: end; align-self: end; width: 232px; margin-bottom: 66px; display: flex; flex-direction: column; gap: 10px; }
 .legend { width: 100%; }
+
+/* Botón de "mi ubicación", esquina inferior derecha (sobre la atribución de OSM). */
+.locate-btn {
+  position: fixed; right: 16px; bottom: 28px; z-index: 560;
+  width: 42px; height: 42px; padding: 0;
+  display: grid; place-items: center;
+  border-radius: 50%; cursor: pointer;
+  background: var(--glass); backdrop-filter: blur(16px) saturate(1.6);
+  -webkit-backdrop-filter: blur(16px) saturate(1.6);
+  border: 1px solid var(--border-soft); box-shadow: var(--shadow);
+  color: var(--text-secondary);
+}
+.locate-btn:hover { background: var(--surface-1); color: var(--text-primary); }
+.locate-btn svg { width: 21px; height: 21px; stroke-width: 2; }
+.locate-btn.active { color: var(--geo); border-color: var(--geo); }
+.locate-btn.active svg circle:first-of-type { fill: currentColor; }
+.locate-btn.busy { pointer-events: none; }
+.locate-btn.busy svg { animation: spin .8s linear infinite; }
+
+/* Punto azul de la posición del usuario (el halo de precisión se estiliza en JS). */
+.user-dot { background: none; border: 0; display: grid; place-items: center; }
+.user-dot span {
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--geo); border: 3px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .18), 0 1px 5px rgba(0, 0, 0, .4);
+}
 .toast { grid-column: 2; grid-row: 1; justify-self: end; }
 
 /* ---------- superficies ---------- */
@@ -539,10 +571,10 @@ select {
   .stack { max-height: none; }
   .map-tools, .corner-br, .toast { grid-column: 1; }
   .map-tools { grid-row: 2; align-self: start; }
-  /* Sólo el "N zonas abiertas": justo encima de la hoja plegada. Al desplegarla
-     queda debajo, que no importa. */
-  .corner-br { grid-row: 3; justify-self: center; align-self: end; width: auto; margin-bottom: 84px; }
-  .legend { display: none; }
+  /* En móvil la cabecera de la hoja ya da el recuento; el aviso flotante sobra. */
+  .corner-br, .zoom-hint { display: none; }
+  /* El botón de ubicación, por encima de la hoja plegada y de la atribución. */
+  .locate-btn { right: 12px; bottom: 96px; }
   .filters { left: 10px; right: 10px; width: auto; top: 116px; }
   /* La atribución de OSM tiene que verse por encima de la hoja plegada. */
   .leaflet-bottom.leaflet-right { bottom: 76px; }
