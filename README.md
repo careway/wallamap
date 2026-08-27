@@ -82,6 +82,10 @@ vista. Así la cobertura crece conforme exploras. Se guardan como mucho ~14 tile
 los más viejos se descartan. El botón **"Buscar en esta zona"** fuerza el mismo
 tile manualmente (y aparece solo si hace falta).
 
+La lista de zonas (y la numeración de las burbujas) se ordena por **cercanía al
+centro del mapa**: lo que tienes enfocado sale primero, y se reordena al panear.
+Empate: más anuncios antes.
+
 ## Estructura
 
 | Fichero | Qué hace |

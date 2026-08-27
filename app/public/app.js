@@ -205,7 +205,17 @@ const zoneBounds = new Map();   // geometría de todas, para poder volar a ellas
 function render(result) {
   if (!result) return;
   lastResult = result;
-  const { cells, stats } = result;
+  const { stats } = result;
+
+  // La lista (y la numeración de las burbujas) va por cercanía al centro del
+  // mapa: lo que tienes enfocado sale primero. Empate: más anuncios antes.
+  const center = map.getCenter();
+  const distToCenter = new Map(
+    result.cells.map((c) => [c.id, center.distanceTo([c.lat, c.lon])]),
+  );
+  const cells = result.cells
+    .slice()
+    .sort((a, b) => distToCenter.get(a.id) - distToCenter.get(b.id) || b.count - a.count);
 
   zoneLayer.clearLayers();
   pinLayer.clearLayers();
