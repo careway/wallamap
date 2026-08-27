@@ -8,6 +8,7 @@
 //     del anuncio, no con su ubicación. Son decorativas y la interfaz lo dice.
 
 import { searchCells, recell } from './lib/store.js';
+import { installSheet } from './lib/sheet.js';
 
 const DEFAULT_VIEW = { lat: 40.4168, lon: -3.7038, zoom: 12 };
 const CELL_Z_OFFSET = 2;      // nivel de celda = zoom del mapa + 2 (~64 px por zona)
@@ -644,6 +645,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ============ arranque ============ */
+installSheet($('results'));
+
 (function boot() {
   const q = new URLSearchParams(location.search);
   const lat = Number(q.get('lat'));
