@@ -1,8 +1,11 @@
 name: Deploy a GitHub Pages
 
 # Publica app/public/ (la versión sin backend) en GitHub Pages.
-# `enablement: true` activa Pages la primera vez; si tu repo no lo permite por
-# política, actívalo a mano en Settings -> Pages -> Source = "GitHub Actions".
+#
+# REQUISITO PREVIO (una sola vez): Settings -> Pages -> Build and deployment ->
+# Source = "GitHub Actions". El token del workflow no puede crear el sitio de
+# Pages por API en este repo ("Resource not accessible by integration"), así que
+# hay que activarlo a mano antes del primer despliegue.
 
 on:
   push:
@@ -31,8 +34,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: actions/configure-pages@v6
-        with:
-          enablement: true
       - uses: actions/upload-pages-artifact@v5
         with:
           path: app/public
