@@ -100,6 +100,7 @@ const money = (n) => (Number.isFinite(n) ? euro.format(n) : '—');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const plural_word = (n, one, many) => `${n === 1 ? one : many}`;
 
 function km(value) {
   if (value >= 10) return `${Math.round(value)} km`;
@@ -460,7 +461,7 @@ function renderList(places) {
 function renderHeader({ cells }, places) {
   const shown = cells.reduce((n, c) => n + c.count, 0);
   els.resultsTitle.innerHTML =
-    `<span class="accent">${shown}</span> ${plural(shown, 'anuncio', 'anuncios')} en ${plural(places.length, 'población', 'poblaciones')}`;
+    `<span class="accent">${shown}</span> ${plural_word(shown, 'anuncio', 'anuncios')} en ${plural(places.length, 'población', 'poblaciones')}`;
 
   if (!places.length) { els.resultsSub.textContent = 'Sin resultados'; return; }
   const onlyProv = places.filter((p) => !p.precise).length;
