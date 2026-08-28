@@ -1,3 +1,7 @@
 node_modules/
 *.log
 .env
+
+# Datos de runtime de nginx-proxy-manager (incluye claves privadas y BD)
+proxy/data/
+proxy/letsencrypt/

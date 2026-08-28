@@ -41,6 +41,9 @@
       </div>
 
       <section class="card results" id="results" aria-live="polite">
+        <button class="sheet-grip" id="sheet-grip" type="button"
+                aria-controls="zone-list" aria-expanded="false"
+                aria-label="Desplegar u ocultar la lista de zonas"></button>
         <div class="results-head">
           <div>
             <h2 id="results-title">Empieza por una búsqueda</h2>
@@ -58,9 +61,10 @@
       <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2a6 6 0 0 1 6 6c0 4.2-4.6 9.4-5.4 10.2a.8.8 0 0 1-1.2 0C8.6 17.4 4 12.2 4 8a6 6 0 0 1 6-6Zm0 3.8A2.2 2.2 0 1 0 10 10a2.2 2.2 0 0 0 0-4.2Z"/></svg>
       Buscar en esta zona
     </button>
+    <div class="pill busy" id="map-busy" role="status" hidden>
+      <span class="spinner" aria-hidden="true"></span> Trayendo esta zona…
+    </div>
   </div>
-
-  <div class="zoom-hint" id="zoom-hint" hidden></div>
 
   <aside class="card legend" id="legend" hidden>
     <div class="legend-head">
@@ -72,6 +76,15 @@
     <ul id="legend-strokes"></ul>
     <p class="legend-note" id="legend-note"></p>
   </aside>
+
+  <button class="locate-btn" id="locate-btn" type="button" aria-pressed="false"
+          title="Mi ubicación" aria-label="Centrar la búsqueda en mi ubicación">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="3.4"></circle>
+      <circle cx="12" cy="12" r="7.5"></circle>
+      <path d="M12 1.5V5M12 19v3.5M1.5 12H5M19 12h3.5"></path>
+    </svg>
+  </button>
 
   <div class="toast" id="toast" hidden></div>
 </div>
@@ -85,8 +98,8 @@
       <select id="distance">
         <option value="">Sin límite</option>
         <option value="5000">5 km</option>
-        <option value="10000" selected>10 km</option>
-        <option value="30000">30 km</option>
+        <option value="10000">10 km</option>
+        <option value="30000" selected>30 km</option>
         <option value="100000">100 km</option>
       </select>
     </label>

@@ -5,12 +5,29 @@ está cada anuncio. El detalle de las zonas sigue al zoom del mapa y, cuando te
 acercas del todo, cada anuncio aparece como una viñeta con su foto dentro de su
 zona.
 
+Quien habla con Wallapop es el **servidor**: el navegador sólo llama a `/api/*` y
+nunca recibe coordenadas por anuncio. (La variante sin backend, que llama a
+Wallapop desde el navegador, vive en la rama `cliente-side`.)
+
 ```
+cd app
+npm ci
 npm start          # http://localhost:3000
 ```
 
-Sin dependencias: sólo Node ≥ 18 (usa `fetch` nativo). Leaflet, los tiles de
-OpenStreetMap y la tipografía Inter se cargan por CDN.
+Node ≥ 18 (usa `fetch` nativo). La única dependencia es `undici`, y sólo para
+poder salir por un proxy (`HTTPS_PROXY`) en el despliegue con Docker. Leaflet, los
+tiles de OpenStreetMap y la tipografía Inter se cargan por CDN.
+
+Con Docker:
+
+```
+docker compose up -d
+```
+
+El contenedor de la app va en una red **interna** y sale a Wallapop únicamente a
+través de `squid`, que sólo permite `api.wallapop.com` (`squid/squid.conf`).
+Delante van nginx-proxy-manager (TLS) y duckdns.
 
 ## Cómo protege la ubicación
 
@@ -50,6 +67,11 @@ foto, enlace y el centro de una celda.
 7. **Nada de código postal.** `postal_code` y las coordenadas se descartan; sólo
    se conserva la provincia para etiquetar la zona.
 
+Lo único posicional que sí baja al navegador son los **centros de los tiles ya
+traídos** (`anchors`): son puntos que ha elegido el propio usuario moviendo el
+mapa, no ubicaciones de anuncios, y sirven para que el cliente decida solo si
+hace falta pedir más sin una petición por cada paneo.
+
 No hay controles de privacidad en la interfaz: los parámetros son constantes del
 servidor (`lib/privacy.js`) y el cliente no puede pedir más detalle del permitido
 —`clampCellZ()` recorta cualquier `cellZ` que llegue por la URL.
@@ -72,40 +94,90 @@ de sobra, pero repartir sus anuncios por media ciudad haría pasar por detallado
 justo lo que es más impreciso.
 
 Cada cambio de zoom **no vuelve a pedirle nada a Wallapop**: el servidor guarda
-los anuncios de la búsqueda bajo un `searchId` (10 min) y `/api/cells` los
-reagrupa al vuelo. El color de cada zona codifica cuántos anuncios contiene
-(rampa secuencial de un solo tono, validada para daltonismo y contraste, y
-recorrida al revés en tema oscuro para que "más" siga siendo "más visible").
+los anuncios de la sesión bajo un `searchId` (10 min) y `/api/cells` los reagrupa
+al vuelo. El color de cada zona codifica cuántos anuncios contiene (rampa
+secuencial de un solo tono, validada para daltonismo y contraste, y recorrida al
+revés en tema oscuro para que "más" siga siendo "más visible").
+
+## Búsqueda progresiva
+
+Una búsqueda es una **sesión** en el servidor que va acumulando *tiles*: cada
+tile es una petición a Wallapop centrada en un punto, con sus anuncios recortados
+al radio del filtro de distancia (Wallapop ignora el parámetro `distance`, así que
+el recorte se hace en `server.js` — por eso "10 km" significa 10 km de verdad).
+
+Al **parar de mover el mapa**, si el centro del recuadro cae fuera de los tiles ya
+traídos (`coverageGap()` en el cliente, sobre los `anchors` que devuelve la API),
+la app pide otro tile ahí con `/api/extend` y el servidor lo fusiona con los que
+ya tenía, sin mover la vista. Así la cobertura crece conforme exploras. Se
+guardan como mucho ~14 tiles por sesión; los más viejos se descartan. El botón
+**"Buscar en esta zona"** fuerza el mismo tile manualmente (y aparece solo si
+hace falta).
+
+Cada búsqueda abre su propia sesión: como los tiles se van acumulando con el
+paneo, compartirlas entre navegadores mezclaría ciudades ajenas en el mapa.
+
+## El listado
+
+La lista agrupa por **población** (`city`, o la provincia si el grupo no llega al
+mínimo), no por celda del mapa: el mapa sigue dibujando un círculo por celda,
+pero el panel junta las de un mismo municipio en una entrada con su rango de
+precios y sus anuncios ordenados de más barato a más caro.
+
+Se ordena por **cercanía al centro del mapa**: lo que tienes enfocado sale
+primero, y se reordena al panear. Empate: más anuncios antes. La numeración de
+las burbujas del mapa sigue a la del listado.
+
+En **móvil** la lista es una hoja inferior arrastrable (`lib/sheet.js`): plegada
+al arrancar, se sube desde el asa o la cabecera y encaja en tres posiciones; un
+toque alterna entre plegada y media. El buscador se queda arriba.
+
+## Mi ubicación
+
+El botón azul de la esquina inferior derecha pide la ubicación, pinta un **punto
+azul** (con halo de precisión) y vuela hasta allí con zoom. Mientras el punto es
+el centro, la búsqueda va centrada en la persona; **en cuanto mueves el mapa**,
+vuelve al modo "centro del mapa". El punto se queda y se sigue con
+`watchPosition`. El selector "Centro de búsqueda" de los filtros hace lo mismo.
 
 ## Estructura
 
 | Fichero | Qué hace |
 |---|---|
-| `server.js` | Estáticos, `/api/search`, `/api/cells`, caché por búsqueda y límite de 30 búsquedas/min por IP. |
-| `lib/wallapop.js` | Cliente del endpoint de búsqueda, paginación y normalización de anuncios. |
-| `lib/privacy.js` | Rejilla de tiles y agregación con k-anonimato. `aggregate()` es pura y testeable. |
-| `public/` | Interfaz: mapa Leaflet, panel de zonas, filtros, viñetas y tema claro/oscuro. |
+| `app/server.js` | Estáticos, `/api/search`, `/api/extend`, `/api/cells`, sesiones de búsqueda progresiva y límite de 30 peticiones/min por IP. |
+| `app/lib/wallapop.js` | Cliente del endpoint de búsqueda, paginación y normalización de anuncios. |
+| `app/lib/privacy.js` | Rejilla de tiles y agregación con k-anonimato. `aggregate()` es pura y testeable. |
+| `app/public/app.js` | Render del mapa, viñetas, listado, tema, estado y URL. |
+| `app/public/lib/sheet.js` | Hoja inferior arrastrable de la lista en móvil. |
+| `app/Dockerfile`, `docker-compose.yaml`, `squid/` | Despliegue: la app en red interna, con salida a Wallapop sólo vía squid. |
 
 ## API
 
-`GET /api/search` — descarga y agrupa.
+`GET /api/search` — abre una sesión, trae su primer tile y agrupa.
 
 | Parámetro | Por defecto | Notas |
 |---|---|---|
 | `keywords` | — | obligatorio |
-| `lat`, `lon` | — | obligatorio, centro de la búsqueda |
+| `lat`, `lon` | — | obligatorio, centro del primer tile |
 | `pages` | 3 | 40 anuncios por página, máximo 5 |
-| `minPrice`, `maxPrice`, `distance` | — | `distance` en metros |
+| `minPrice`, `maxPrice`, `distance` | — | `distance` en metros; fija el radio del tile |
 | `order` | `most_relevance` | `newest`, `price_low_to_high`, `price_high_to_low`, `closest` |
 | `cellZ` | 14 | nivel de agrupación pedido; se recorta a [3, 14] |
 
-`GET /api/cells?searchId=…&cellZ=…` — reagrupa una búsqueda ya descargada sin
-tocar Wallapop. Devuelve `404 {expired:true}` si ha caducado.
+`GET /api/extend?searchId=…&lat=…&lon=…&cellZ=…` — trae un tile más en ese punto
+y lo fusiona con los de la sesión.
 
-Respuesta: `{ searchId, query, cells: [{ id, z, lat, lon, radiusKm, anchorRadiusKm, count, anonymous, region, city, price, items }], stats }`.
+`GET /api/cells?searchId=…&cellZ=…` — reagrupa lo ya descargado sin tocar
+Wallapop.
+
+`/api/extend` y `/api/cells` devuelven `404 {expired:true}` si la sesión ha
+caducado; el cliente lo trata relanzando la búsqueda.
+
+Respuesta: `{ searchId, query, cells: [{ id, z, lat, lon, radiusKm, anchorRadiusKm, count, anonymous, region, city, price, items }], anchors, tileKm, stats }`.
 `lat`/`lon` son el ancla publicada, `radiusKm` la escala de la zona y
 `anchorRadiusKm` la precisión del ancla. `city` sólo aparece si el grupo cumple
-el mínimo; por debajo se queda en `region`.
+el mínimo; por debajo se queda en `region`. `anchors` son los centros de los
+tiles ya traídos y `tileKm` su radio.
 
 La interfaz refleja búsqueda y encuadre en la URL (`lat`, `lon`, `z`, `theme`),
 así que un enlace se abre igual que se dejó.
@@ -113,8 +185,9 @@ así que un enlace se abre igual que se dejó.
 ## Aviso sobre la fuente de datos
 
 `api.wallapop.com/api/v3/search` **no es una API pública documentada**. Funciona
-hoy sin autenticación —requiere `source=search_box` y coordenadas—, pero puede
-cambiar, exigir firma o bloquear por volumen sin previo aviso. Por eso el
-proyecto cachea, limita el ritmo y aísla todo lo que depende de su formato en
-`lib/wallapop.js`: si algo se rompe, se arregla en `normalizeItem()`. Úsalo a un
-ritmo razonable y respeta los términos de servicio de Wallapop.
+hoy sin autenticación —requiere `source=search_box`, coordenadas y la cabecera
+`X-DeviceOS`—, pero puede cambiar, exigir firma o bloquear por volumen sin previo
+aviso. Por eso el proyecto cachea por sesión, limita el ritmo y aísla todo lo que
+depende de su formato en `lib/wallapop.js`: si algo se rompe, se arregla en
+`normalizeItem()`. Úsalo a un ritmo razonable y respeta los términos de servicio
+de Wallapop.

@@ -1,0 +1,61 @@
+services:
+  wallamap:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: wallamap
+    restart: always
+    environment:
+      - HTTPS_PROXY=http://squid_proxy:3128
+      - HTTP_PROXY=http://squid_proxy:3128
+      - NO_PROXY=nginx_proxy_manager
+    networks:
+      - red_privada
+
+  squid_proxy:
+    image: ubuntu/squid:latest
+    container_name: squid_proxy
+    restart: always
+    volumes:
+      - ./squid/squid.conf:/etc/squid/squid.conf:ro
+    networks:
+      - red_privada
+      - red_egress
+
+  proxy_manager:
+    image: 'jc21/nginx-proxy-manager:latest'
+    container_name: nginx_proxy_manager
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+      - '192.168.31.111:81:81'
+    volumes:
+      - ./proxy/data:/data
+      - ./proxy/letsencrypt:/etc/letsencrypt
+    networks:
+      - red_publica
+      - red_privada
+
+  duckdns:
+    image: lscr.io/linuxserver/duckdns:latest
+    container_name: mi_duckdns
+    restart: always
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Madrid
+      - SUBDOMAINS=wallamap
+      - TOKEN=${DUCKDNS_TOKEN}
+      - LOG_FILE=true
+    networks:
+      - red_publica
+
+networks:
+  red_publica:
+    driver: bridge
+  red_privada:
+    driver: bridge
+    internal: true
+  red_egress:
+    driver: bridge

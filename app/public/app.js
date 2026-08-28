@@ -1,9 +1,12 @@
 // Mapa de resultados agregados.
 //
-// Dos invariantes que conviene no romper:
+// Quien habla con Wallapop es el servidor: aquí sólo se llama a /api/*. Dos
+// invariantes que conviene no romper:
 //  1. El navegador nunca recibe coordenadas de anuncios: sólo centros de zona.
 //  2. Las viñetas que aparecen al acercar el mapa se colocan con un hash del id
 //     del anuncio, no con su ubicación. Son decorativas y la interfaz lo dice.
+
+import { installSheet } from './lib/sheet.js';
 
 const DEFAULT_VIEW = { lat: 40.4168, lon: -3.7038, zoom: 12 };
 const CELL_Z_OFFSET = 2;      // nivel de celda = zoom del mapa + 2 (~64 px por zona)
@@ -22,7 +25,8 @@ const els = {
   order: $('order'), pages: $('pages'), centerMode: $('center-mode'),
   resultsTitle: $('results-title'), resultsSub: $('results-sub'),
   zoneList: $('zone-list'), empty: $('empty'),
-  searchHere: $('search-here'), zoomHint: $('zoom-hint'),
+  searchHere: $('search-here'), mapBusy: $('map-busy'),
+  locateBtn: $('locate-btn'),
   legend: $('legend'), legendItems: $('legend-items'), legendNote: $('legend-note'),
   legendStrokes: $('legend-strokes'),
   toast: $('toast'),
@@ -94,6 +98,7 @@ const money = (n) => (Number.isFinite(n) ? euro.format(n) : '—');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const plural_word = (n, one, many) => `${n === 1 ? one : many}`;
 
 function km(value) {
   if (value >= 10) return `${Math.round(value)} km`;
@@ -148,22 +153,6 @@ function listItemHtml(item) {
   </a></li>`;
 }
 
-function zoneHtml(cell, index, color) {
-  const price = cell.price
-    ? `${money(cell.price.min)} – ${money(cell.price.max)} · mediana ${money(cell.price.median)}`
-    : 'Sin precios';
-  return `<li class="zone" data-id="${esc(cell.id)}">
-    <div class="zone-top">
-      <span class="dot" style="background:${color}"></span>
-      <span class="zone-title">${zoneName(cell, index)}</span>
-      <span class="zone-count">${cell.count}</span>
-    </div>
-    <p class="zone-sub">${price}</p>
-    <ul class="zone-items">${cell.items.slice(0, ZONE_PREVIEW).map(listItemHtml).join('')}</ul>
-    ${cell.count > ZONE_PREVIEW ? `<button class="zone-more" data-more="${esc(cell.id)}">Ver ${plural(cell.count - ZONE_PREVIEW, 'anuncio más', 'anuncios más')} en el mapa →</button>` : ''}
-  </li>`;
-}
-
 function zonePopupHtml(cell, index) {
   const price = cell.price ? `${money(cell.price.min)} – ${money(cell.price.max)}` : 'sin precio';
   return `<div class="popup">
@@ -174,6 +163,64 @@ function zonePopupHtml(cell, index) {
       ? 'Por debajo del mínimo por zona: de estos anuncios sólo se publica la provincia.'
       : `Están en torno a esta zona de ${km(cell.radiusKm * 2)}, sin más precisión.`}</p>
   </div>`;
+}
+
+/* --- listado agrupado por población (no por celda del mapa) --- */
+
+const placeKeyOf = (cell) => cell.city || cell.region || 'Otras zonas';
+const placeColor = (place) => (place.precise ? cssVar(bucketOf(place).varName) : cssVar('--d-sparse'));
+
+function priceSummary(items) {
+  const prices = items.map((i) => i.price).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!prices.length) return null;
+  const mid = Math.floor(prices.length / 2);
+  return {
+    min: prices[0],
+    max: prices[prices.length - 1],
+    median: prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2,
+  };
+}
+
+/** Junta las celdas del mapa en poblaciones. Hereda el orden de `cells` (por
+ *  cercanía al centro): la primera aparición de una población marca su sitio. */
+function buildPlaces(cells) {
+  const byKey = new Map();
+  for (const cell of cells) {
+    const key = placeKeyOf(cell);
+    let place = byKey.get(key);
+    if (!place) {
+      place = { key, name: key, cells: [], items: [], count: 0, precise: false };
+      byKey.set(key, place);
+    }
+    place.cells.push(cell);
+    place.items.push(...cell.items);
+    place.count += cell.count;
+    if (!cell.anonymous) place.precise = true;
+  }
+  const places = [...byKey.values()];
+  for (const place of places) {
+    place.items.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+    place.price = priceSummary(place.items);
+  }
+  return places;
+}
+
+function placeHtml(place, index) {
+  const p = place.price;
+  const priceLine = p ? `${money(p.min)} – ${money(p.max)} · mediana ${money(p.median)}` : 'Sin precios';
+  const preview = place.items.slice(0, ZONE_PREVIEW).map(listItemHtml).join('');
+  const rest = place.items.slice(ZONE_PREVIEW);
+  return `<li class="zone" data-id="${esc(place.key)}">
+    <div class="zone-top">
+      <span class="dot" style="background:${placeColor(place)}"></span>
+      <span class="zone-title">${index + 1}. ${esc(place.name)}${place.precise ? '' : ' · sólo provincia'}</span>
+      <span class="zone-count">${place.count}</span>
+    </div>
+    <p class="zone-sub">${priceLine}</p>
+    <ul class="zone-items">${preview}</ul>
+    ${rest.length ? `<ul class="zone-items zone-rest" hidden>${rest.map(listItemHtml).join('')}</ul>
+      <button class="zone-more" type="button">Ver ${plural(rest.length, 'anuncio más', 'anuncios más')}</button>` : ''}
+  </li>`;
 }
 
 function itemPopupHtml(item, cell, loose = false) {
@@ -193,32 +240,47 @@ function itemPopupHtml(item, cell, loose = false) {
 
 /* ============ render ============ */
 let lastResult = null;
-const circles = new Map();      // sólo las zonas con aro dibujado
-const zoneBounds = new Map();   // geometría de todas, para poder volar a ellas
+let selectedZoneId = null;      // clave de la población seleccionada; se conserva entre re-renders
+const zoneBounds = new Map();   // población -> bounds, para volar a ella
 
 function render(result) {
   if (!result) return;
   lastResult = result;
-  const { cells, stats } = result;
+  const { stats } = result;
+
+  // La lista (y la numeración de las burbujas) va por cercanía al centro del
+  // mapa: lo que tienes enfocado sale primero. Empate: más anuncios antes.
+  const center = map.getCenter();
+  const distToCenter = new Map(
+    result.cells.map((c) => [c.id, center.distanceTo([c.lat, c.lon])]),
+  );
+  const cells = result.cells
+    .slice()
+    .sort((a, b) => distToCenter.get(a.id) - distToCenter.get(b.id) || b.count - a.count);
 
   zoneLayer.clearLayers();
   pinLayer.clearLayers();
-  circles.clear();
   zoneBounds.clear();
-  // El panel lista todas las zonas, también las que no se dibujan (fuera de
-  // vista, o con el aro demasiado grande), así que su geometría se guarda
-  // aparte para que al pulsarlas el mapa pueda ir hasta ellas.
-  for (const cell of cells) {
-    zoneBounds.set(cell.id, L.latLng(cell.lat, cell.lon).toBounds(cell.radiusKm * 2000));
+
+  // El listado agrupa por población; el mapa sigue dibujando un círculo por celda.
+  const places = buildPlaces(cells);
+  const placeIndexOf = new Map(places.map((p, i) => [p.key, i]));
+  for (const place of places) {
+    let b = null;
+    for (const c of place.cells) {
+      const cb = L.latLng(c.lat, c.lon).toBounds(Math.max(c.radiusKm, 1) * 2000);
+      b = b ? b.extend(cb) : cb;
+    }
+    zoneBounds.set(place.key, b);
   }
 
   const bounds = map.getBounds().pad(0.35);
-  let bloomed = 0;
   let imprecisePins = false;
   // Referencia para atenuar el relleno de las zonas grandes.
   const viewportM = map.getBounds().getNorthWest().distanceTo(map.getBounds().getNorthEast());
 
-  cells.forEach((cell, index) => {
+  cells.forEach((cell) => {
+    const index = placeIndexOf.get(placeKeyOf(cell));   // nº de la población en el listado
     const color = colorFor(cell);
     // Si el centro no está en pantalla sólo se vería un arco suelto: no aporta
     // nada y el panel lateral ya lista la zona.
@@ -249,7 +311,6 @@ function render(result) {
     // amontonarlas en una chapa sugería un punto concreto, cuando justamente
     // son las menos precisas. Sus viñetas van marcadas como tales.
     const open = fitsInside(cell);
-    if (open) bloomed++;
 
     if (open) {
       renderPins(cell, index, { imprecise: widened });
@@ -272,15 +333,13 @@ function render(result) {
       fillOpacity: widened ? 0.03 : Math.max(0.05, (open ? 0.1 : 0.22) - screenShare * 0.4),
       className: 'zone-circle',
     }).addTo(zoneLayer);
-    circle.on('click', () => selectZone(cell.id, false));
-    circles.set(cell.id, circle);
+    circle.on('click', () => selectZone(placeKeyOf(cell), false));
     circle.bindPopup(zonePopupHtml(cell, index), { maxWidth: 300, autoPanPadding: [28, 28] });
   });
 
-  renderList(cells);
+  renderList(places);
   renderLegend(cells, stats, imprecisePins);
-  renderHeader(result);
-  renderZoomHint(stats, bloomed);
+  renderHeader(result, places);
 }
 
 /** Tinta legible sobre un color de la rampa (que va de teal claro a casi negro). */
@@ -336,7 +395,7 @@ function renderCount(cell, index, color, widened) {
 
   if (compact) {
     marker
-      .on('click', () => selectZone(cell.id, false))
+      .on('click', () => selectZone(placeKeyOf(cell), false))
       .bindPopup(zonePopupHtml(cell, index), { maxWidth: 300, autoPanPadding: [28, 28] });
   }
 }
@@ -365,32 +424,48 @@ function renderPins(cell, index, { spreadKm = cell.radiusKm, loose = false, impr
   });
 }
 
-function renderList(cells) {
-  els.zoneList.innerHTML = cells.map((cell, i) => zoneHtml(cell, i, colorFor(cell))).join('');
+function renderList(places) {
+  const prevScroll = els.zoneList.scrollTop;
+  els.zoneList.innerHTML = places.map((p, i) => placeHtml(p, i)).join('');
+  els.zoneList.scrollTop = prevScroll;   // no saltar al principio en cada re-render
   els.zoneList.querySelectorAll('.zone').forEach((node) => {
     node.addEventListener('click', (event) => {
       if (event.target.closest('a')) return;
       const more = event.target.closest('.zone-more');
+      if (more) {
+        const rest = node.querySelector('.zone-rest');
+        const wasOpen = !rest.hidden;
+        rest.hidden = wasOpen;
+        more.textContent = wasOpen
+          ? `Ver ${plural(rest.children.length, 'anuncio más', 'anuncios más')}`
+          : 'Ver menos';
+        return;
+      }
       selectZone(node.dataset.id, true);
-      if (more) circles.get(more.dataset.more)?.openPopup();
     });
   });
-  els.empty.hidden = cells.length > 0;
-  if (cells.length) selectZone(cells[0].id, false);
+  els.empty.hidden = places.length > 0;
+
+  // Conserva la población seleccionada entre re-renders; sólo hace scroll cuando
+  // no hay ninguna válida que mantener.
+  const keep = selectedZoneId && places.some((p) => p.key === selectedZoneId);
+  if (keep) {
+    els.zoneList.querySelectorAll('.zone').forEach((n) => n.classList.toggle('active', n.dataset.id === selectedZoneId));
+  } else if (places.length) {
+    selectZone(places[0].key, false);
+  }
 }
 
-function renderHeader({ cells, stats }) {
+function renderHeader({ cells }, places) {
   const shown = cells.reduce((n, c) => n + c.count, 0);
-  const zones = cells.filter((c) => !c.anonymous);
-  const loose = cells.reduce((n, c) => n + (c.anonymous ? c.count : 0), 0);
-  els.resultsTitle.innerHTML = `<span class="accent">${shown}</span> anuncios en ${plural(zones.length, 'zona', 'zonas')}`;
+  els.resultsTitle.innerHTML =
+    `<span class="accent">${shown}</span> ${plural_word(shown, 'anuncio', 'anuncios')} en ${plural(places.length, 'población', 'poblaciones')}`;
 
-  if (!cells.length) { els.resultsSub.textContent = 'Sin resultados'; return; }
-  const sizes = zones.map((c) => c.radiusKm * 2);
+  if (!places.length) { els.resultsSub.textContent = 'Sin resultados'; return; }
+  const onlyProv = places.filter((p) => !p.precise).length;
   els.resultsSub.textContent = [
-    sizes.length ? `Zonas de ${km(Math.min(...sizes))} a ${km(Math.max(...sizes))}` : null,
-    sizes.length ? `mínimo ${stats.k} anuncios cada una` : null,
-    loose ? `${plural(loose, 'suelto', 'sueltos')} sin zona` : null,
+    'Ordenadas por cercanía al centro del mapa',
+    onlyProv ? `${plural(onlyProv, 'población', 'poblaciones')} sólo por provincia` : null,
   ].filter(Boolean).join(' · ');
 }
 
@@ -421,33 +496,87 @@ function renderLegend(cells, stats, imprecisePins) {
   els.legend.hidden = !cells.length;
 }
 
-function renderZoomHint(stats, bloomed) {
-  let text;
-  if (bloomed) text = `<b>${plural(bloomed, 'zona abierta', 'zonas abiertas')}</b> · posiciones aproximadas dentro de cada una`;
-  else if (stats.atFinestLevel) text = '<b>Detalle máximo de zona</b> · acerca más para abrir los anuncios';
-  else text = 'Acerca el mapa para <b>afinar las zonas</b>';
-  els.zoomHint.innerHTML = text;
-  els.zoomHint.hidden = false;
-}
-
 function selectZone(id, fly) {
+  selectedZoneId = id;
   els.zoneList.querySelectorAll('.zone').forEach((n) => n.classList.toggle('active', n.dataset.id === id));
   const node = els.zoneList.querySelector(`.zone[data-id="${CSS.escape(id)}"]`);
   const bounds = zoneBounds.get(id);
   if (fly && bounds) {
     programmaticMove = true;
-    map.flyToBounds(bounds.pad(0.35), { duration: 0.5 });
+    map.flyToBounds(bounds.pad(0.3), { duration: 0.5, maxZoom: 14 });
   }
   if (!fly && node) node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 /* ============ estado y peticiones ============ */
-let searchId = null;
+//
+// La búsqueda es progresiva: el servidor guarda una sesión (searchId) que va
+// acumulando *tiles*, uno por cada punto donde se ha pedido a Wallapop. Al
+// panear, si el centro cae fuera de los tiles ya traídos se pide otro con
+// /api/extend y el servidor devuelve el conjunto fusionado.
+//
+// De cada tile el navegador recibe sólo su centro y su radio —puntos que ha
+// elegido el propio usuario moviendo el mapa, no ubicaciones de anuncios—, lo
+// justo para decidir por su cuenta si hace falta pedir más, sin una petición
+// por cada paneo.
+const SESSION_TTL_MS = 10 * 60 * 1000;   // el mismo que aplica el servidor
+const REFETCH_FRACTION = 0.6;    // se pide tile nuevo si el centro se aleja > tileKm * esto
+const VIEWPORT_FRACTION = 0.12;  // ...pero nunca antes de viewport * esto (menos peticiones al alejar)
+
 let currentCellZ = null;
 let keepView = false;
 let programmaticMove = false;   // encuadres nuestros: no cuentan como "el usuario se ha movido"
-let searchCenter = null;
 let inFlight = null;
+let extending = false;          // hay un tile en vuelo por paneo
+let extendTimer = null;
+
+let searchId = null;
+let sessionAt = 0;
+let anchors = [];               // centros de los tiles ya traídos
+let tileKm = 0;                 // radio de cada tile, en km
+
+/** ¿Hay una sesión de búsqueda que el servidor todavía deba reconocer? */
+function hasSession() {
+  return Boolean(searchId) && Date.now() - sessionAt <= SESSION_TTL_MS;
+}
+
+function adoptSession(body) {
+  searchId = body.searchId ?? searchId;
+  sessionAt = Date.now();
+  anchors = body.anchors ?? anchors;
+  tileKm = body.tileKm ?? tileKm;
+}
+
+function dropSession() {
+  searchId = null;
+  anchors = [];
+}
+
+function kmBetween(a, b) {
+  return L.latLng(a.lat, a.lon).distanceTo([b.lat, b.lon]) / 1000;
+}
+
+/**
+ * ¿El punto (lat, lon) cae fuera de todos los tiles ya traídos?
+ * @param {number} viewportKm ancho aproximado del mapa en km (para pedir menos al alejar)
+ */
+function coverageGap(lat, lon, viewportKm = 0) {
+  if (!anchors.length) return false;
+  const need = Math.max(tileKm * REFETCH_FRACTION, viewportKm * VIEWPORT_FRACTION);
+  const nearest = Math.min(...anchors.map((a) => kmBetween(a, { lat, lon })));
+  return nearest > need;
+}
+
+async function request(url, signal) {
+  const res = await fetch(url, { signal });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const error = new Error(body.error ?? `Error ${res.status}`);
+    error.expired = Boolean(body.expired);
+    throw error;
+  }
+  return body;
+}
 
 function filterParams() {
   const p = new URLSearchParams({ pages: els.pages.value, order: els.order.value });
@@ -479,18 +608,89 @@ els.chips.addEventListener('click', (event) => {
   if (key === 'distance') els.distance.value = '';
   if (key === 'order') els.order.value = 'most_relevance';
   renderChips();
-  if (searchId) runSearch();
+  if (hasSession()) runSearch();
 });
 
+/* ============ ubicación del usuario ============ */
+let lastUserPos = null;        // GeolocationPosition más reciente
+let geoWatchId = null;
+let userDot = null;
+let userHalo = null;
+
+function getUserPosition() {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true, timeout: 9000, maximumAge: 60000,
+    });
+  });
+}
+
+/** Pinta (o mueve) el punto azul y su halo de precisión. */
+function drawUserLocation(pos) {
+  lastUserPos = pos;
+  const ll = [pos.coords.latitude, pos.coords.longitude];
+  const acc = pos.coords.accuracy || 0;
+  if (!userDot) {
+    userHalo = L.circle(ll, {
+      radius: acc, color: cssVar('--geo'), weight: 1, opacity: 0.3,
+      fillColor: cssVar('--geo'), fillOpacity: 0.1, interactive: false,
+    }).addTo(map);
+    userDot = L.marker(ll, {
+      icon: L.divIcon({ className: 'user-dot', html: '<span></span>', iconSize: [21, 21], iconAnchor: [10.5, 10.5] }),
+      interactive: false, keyboard: false, zIndexOffset: 1000,
+    }).addTo(map);
+  } else {
+    userDot.setLatLng(ll);
+    userHalo.setLatLng(ll).setRadius(acc);
+  }
+}
+
+function setGeoMode(on) {
+  els.centerMode.value = on ? 'geo' : 'map';
+  els.locateBtn.classList.toggle('active', on);
+  els.locateBtn.setAttribute('aria-pressed', String(on));
+}
+
+function startGeoWatch() {
+  if (geoWatchId !== null || !navigator.geolocation) return;
+  geoWatchId = navigator.geolocation.watchPosition(
+    drawUserLocation, () => {}, { enableHighAccuracy: true, maximumAge: 30000 },
+  );
+}
+
+/** Botón de ubicación: sitúa el punto, vuela allí y busca centrado en la persona. */
+async function locateMe() {
+  if (!navigator.geolocation) { toast('Tu navegador no comparte la ubicación', 'error'); return; }
+  els.locateBtn.classList.add('busy');
+  try {
+    const pos = await getUserPosition();
+    drawUserLocation(pos);
+    startGeoWatch();
+    setGeoMode(true);
+    keepView = true;                 // que runSearch no reencuadre a los resultados
+    programmaticMove = true;
+    map.flyTo([pos.coords.latitude, pos.coords.longitude], Math.max(map.getZoom(), 14), { duration: 0.6 });
+    if (els.keywords.value.trim()) runSearch();
+  } catch (err) {
+    toast(err && err.code === 1 ? 'Permiso de ubicación denegado' : 'No se pudo obtener tu ubicación', 'error');
+  } finally {
+    els.locateBtn.classList.remove('busy');
+  }
+}
+
 async function currentCenter() {
-  if (els.centerMode.value === 'geo' && navigator.geolocation) {
-    try {
-      const pos = await new Promise((resolve, reject) =>
-        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 8000, maximumAge: 300000 }));
-      map.setView([pos.coords.latitude, pos.coords.longitude], Math.max(map.getZoom(), 12));
-      return { lat: pos.coords.latitude, lon: pos.coords.longitude };
-    } catch {
-      toast('No se pudo obtener tu ubicación; uso el centro del mapa.');
+  if (els.centerMode.value === 'geo') {
+    if (lastUserPos && Date.now() - lastUserPos.timestamp < 120000) {
+      return { lat: lastUserPos.coords.latitude, lon: lastUserPos.coords.longitude };
+    }
+    if (navigator.geolocation) {
+      try {
+        const pos = await getUserPosition();
+        drawUserLocation(pos);
+        return { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      } catch {
+        toast('No se pudo obtener tu ubicación; uso el centro del mapa.');
+      }
     }
   }
   const c = map.getCenter();
@@ -525,8 +725,7 @@ async function runSearch() {
     params.set('cellZ', currentCellZ);
 
     const body = await request(`/api/search?${params}`, ctrl.signal);
-    searchId = body.searchId;
-    searchCenter = L.latLng(lat, lon);
+    adoptSession(body);
     els.searchHere.hidden = true;
 
     if (!body.cells.length) {
@@ -544,38 +743,95 @@ async function runSearch() {
     }
     syncUrl(params);
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError') return;   // una búsqueda posterior manda: su error, no el nuestro
     toast(err.message, 'error');
     els.zoneList.innerHTML = '';
   } finally {
-    setLoading(false);
-    inFlight = null;
+    if (inFlight === ctrl) {
+      setLoading(false);
+      inFlight = null;
+    }
   }
 }
 
-/** Reagrupa la búsqueda ya descargada al nivel que toca para el zoom actual. */
+/** Reagrupa en el servidor lo ya descargado, al nivel que toca para el zoom actual. */
 async function refreshCells() {
   const cellZ = cellZFor(map.getZoom());
-  if (!searchId || cellZ === currentCellZ) return;
+  if (!hasSession() || cellZ === currentCellZ) return;
   currentCellZ = cellZ;
   try {
     const body = await request(`/api/cells?searchId=${searchId}&cellZ=${cellZ}`);
+    adoptSession(body);
     render(body);
   } catch (err) {
-    if (err.expired) { searchId = null; runSearch(); return; }
+    if (err.expired) { dropSession(); runSearch(); return; }
     toast(err.message, 'error');
   }
 }
 
-async function request(url, signal) {
-  const res = await fetch(url, { signal });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const error = new Error(body.error ?? `Error ${res.status}`);
-    error.expired = Boolean(body.expired);
-    throw error;
-  }
+/** Ancho aproximado del mapa en km, para decidir cada cuánto pedir tiles. */
+function viewportKm() {
+  const b = map.getBounds();
+  return b.getNorthWest().distanceTo(b.getNorthEast()) / 1000;
+}
+
+/** Muestra el indicador de "trayendo esta zona". */
+function setBusy(on) {
+  els.mapBusy.hidden = !on;
+}
+
+/** Pide un tile más en (lat, lon); el servidor lo fusiona con los que ya tenía. */
+async function extend(lat, lon) {
+  const params = new URLSearchParams({
+    searchId, lat: lat.toFixed(4), lon: lon.toFixed(4), cellZ: currentCellZ,
+  });
+  const body = await request(`/api/extend?${params}`);
+  adoptSession(body);
   return body;
+}
+
+/**
+ * Al parar el mapa: si el centro cae fuera de los tiles ya traídos, pide otro y
+ * lo fusiona sin mover la vista. Se llama con debounce desde 'moveend'.
+ */
+async function autoExtend() {
+  if (extending || !hasSession()) return;
+  const c = map.getCenter();
+  if (!coverageGap(c.lat, c.lng, viewportKm())) return;
+
+  extending = true;
+  setBusy(true);
+  try {
+    currentCellZ = cellZFor(map.getZoom());
+    const body = await extend(c.lat, c.lng);
+    render(body);
+    els.searchHere.hidden = true;   // zona ya cubierta
+    syncUrl();
+  } catch (err) {
+    if (err.expired) { dropSession(); runSearch(); return; }
+    // Fallo de red en una extensión: no se toca la vista; se reintenta al siguiente paneo.
+  } finally {
+    extending = false;
+    setBusy(false);
+  }
+}
+
+/** Fuerza traer la zona del centro actual aunque ya esté cubierta. */
+async function extendHere() {
+  if (!hasSession()) { els.centerMode.value = 'map'; runSearch(); return; }
+  const c = map.getCenter();
+  setBusy(true);
+  try {
+    currentCellZ = cellZFor(map.getZoom());
+    render(await extend(c.lat, c.lng));
+    els.searchHere.hidden = true;
+    syncUrl();
+  } catch (err) {
+    if (err.expired) { dropSession(); runSearch(); }
+    else toast(err.message, 'error');
+  } finally {
+    setBusy(false);
+  }
 }
 
 function showEmpty(keywords) {
@@ -604,24 +860,39 @@ let zoomTimer;
 map.on('zoomend', () => {
   clearTimeout(zoomTimer);
   zoomTimer = setTimeout(() => {
-    const needsFetch = searchId && cellZFor(map.getZoom()) !== currentCellZ;
+    const needsFetch = hasSession() && cellZFor(map.getZoom()) !== currentCellZ;
     if (needsFetch) refreshCells();
     else render(lastResult);            // abrir o cerrar zonas no requiere datos nuevos
   }, 180);
 });
 map.on('moveend', () => {
-  // Sólo se ofrece rebuscar si el centro se ha ido lejos del de la búsqueda.
-  const drift = searchCenter ? map.getCenter().distanceTo(searchCenter) : 0;
-  const viewport = map.getBounds().getNorthWest().distanceTo(map.getBounds().getSouthEast());
-  if (programmaticMove) programmaticMove = false;
-  else if (searchId && drift > viewport * 0.3) els.searchHere.hidden = false;
+  const wasProgrammatic = programmaticMove;
+  programmaticMove = false;
   if (lastResult) render(lastResult);   // repuebla lo que entra y sale de vista
   syncUrl();
+  if (wasProgrammatic) return;
+
+  // El usuario ha movido el mapa: se busca centrado en el mapa, no en la persona.
+  if (els.centerMode.value === 'geo') setGeoMode(false);
+
+  // El botón manual y el auto-fetch se guían por lo mismo: ¿el centro cae fuera
+  // de los tiles ya traídos? El botón aparece ya; el auto-fetch salta tras la
+  // pausa y, si va bien, lo oculta. Si falla, el botón se queda para reintentar.
+  const c = map.getCenter();
+  if (hasSession() && coverageGap(c.lat, c.lng, viewportKm())) els.searchHere.hidden = false;
+
+  clearTimeout(extendTimer);
+  extendTimer = setTimeout(autoExtend, 450);
 });
 
 /* ============ eventos de la interfaz ============ */
 els.form.addEventListener('submit', (e) => { e.preventDefault(); runSearch(); });
-els.searchHere.addEventListener('click', () => { els.centerMode.value = 'map'; runSearch(); });
+els.searchHere.addEventListener('click', extendHere);
+els.locateBtn.addEventListener('click', locateMe);
+els.centerMode.addEventListener('change', () => {
+  if (els.centerMode.value === 'geo') locateMe();
+  else els.locateBtn.classList.remove('active');
+});
 
 const toggleFilters = (open) => {
   els.filters.hidden = !open;
@@ -640,6 +911,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ============ arranque ============ */
+installSheet($('results'));
+
 (function boot() {
   const q = new URLSearchParams(location.search);
   const lat = Number(q.get('lat'));
