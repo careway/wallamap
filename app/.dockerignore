@@ -1,0 +1,7 @@
+# El node_modules del host no entra en la imagen: lo instala el propio
+# Dockerfile con `npm ci`, y el del host puede venir de otra arquitectura.
+node_modules
+npm-debug.log*
+.env
+Dockerfile
+.dockerignore

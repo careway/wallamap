@@ -19,15 +19,21 @@ Node ≥ 18 (usa `fetch` nativo). La única dependencia es `undici`, y sólo par
 poder salir por un proxy (`HTTPS_PROXY`) en el despliegue con Docker. Leaflet, los
 tiles de OpenStreetMap y la tipografía Inter se cargan por CDN.
 
-Con Docker:
+Con Docker, para entrar desde `localhost:3000`:
 
 ```
-docker compose up -d
+docker compose -f docker-compose.yaml -f docker-compose.local.yml \
+  up -d --build wallamap squid_proxy localhost_bridge
 ```
 
 El contenedor de la app va en una red **interna** y sale a Wallapop únicamente a
 través de `squid`, que sólo permite `api.wallapop.com` (`squid/squid.conf`).
-Delante van nginx-proxy-manager (TLS) y duckdns.
+Delante van nginx-proxy-manager (TLS) y duckdns, que es lo que levanta
+`docker compose up -d` a secas en el servidor.
+
+**[setup.md](setup.md)** lo cuenta paso a paso: las tres formas de arrancarlo,
+por qué la app no puede publicar un puerto ella misma, cómo comprobar que el
+cerrojo de salida está echado y qué mirar cuando algo no arranca.
 
 ## Cómo protege la ubicación
 

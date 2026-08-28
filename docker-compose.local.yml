@@ -1,0 +1,35 @@
+# Sobrecarga para entrar desde localhost sin montar el dominio ni nginx-proxy-manager.
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.local.yml \
+#     up -d --build wallamap squid_proxy localhost_bridge
+#
+# Se nombran los servicios a mano para no levantar de paso nginx-proxy-manager
+# ni duckdns, que en local no pintan nada. Y como esta sobrecarga no se carga
+# sola (hay que pasarla con -f), en el servidor `docker compose up -d` a secas
+# sigue arrancando la pila tal cual.
+#
+# Por qué un contenedor puente y no un `ports:` en wallamap: la app vive sólo en
+# `red_privada`, que es `internal: true`, y Docker no publica puertos de un
+# contenedor que sólo está en una red interna (el binding se acepta y luego no
+# existe). Darle a wallamap una red no interna le abriría además una salida a
+# internet por fuera de squid. Con el puente, wallamap se queda exactamente como
+# en producción y quien está a caballo entre las dos redes es este proxy tonto,
+# que es justo el papel que hace nginx-proxy-manager en el servidor.
+services:
+  localhost_bridge:
+    image: alpine/socat:latest
+    container_name: wallamap_localhost
+    restart: unless-stopped
+    command: TCP-LISTEN:3000,fork,reuseaddr TCP:wallamap:3000
+    depends_on:
+      - wallamap
+    ports:
+      # Sólo al bucle local: no queda expuesto a la red de casa.
+      - '127.0.0.1:3000:3000'
+    networks:
+      - red_privada
+      - red_local
+
+networks:
+  red_local:
+    driver: bridge

@@ -29,7 +29,7 @@ services:
     ports:
       - '80:80'
       - '443:443'
-      - '192.168.31.111:81:81'
+      - '81:81'
     volumes:
       - ./proxy/data:/data
       - ./proxy/letsencrypt:/etc/letsencrypt
